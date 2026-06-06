@@ -53,8 +53,8 @@ UPDATE_PACKAGE() {
 
 PATCH_PASSWALL_GLOBAL_LUA() {
 	local CANDIDATES=(
-		"./luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua"
-		"./passwall/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua"
+		"./luci-app-passwall2/luasrc/model/cbi/passwall/client/global.lua"
+		"./passwall2/luci-app-passwall2/luasrc/model/cbi/passwall/client/global.lua"
 	)
 	local FOUND=0
 
@@ -89,30 +89,13 @@ echo "Done removing sing-box from feeds"
 # HomeProxy (代理软件) - 使用第5个参数指定额外要删除的包名
 UPDATE_PACKAGE "homeproxy" "immortalwrt/homeproxy" "master"
 
-# Argon 主题
-UPDATE_PACKAGE "luci-theme-argon" "jerrykuku/luci-theme-argon" "master"
-UPDATE_PACKAGE "luci-app-argon-config" "jerrykuku/luci-app-argon-config" "master"
-
-# 修改 LuCI 默认主题为 Argon（保留 bootstrap 包可共存）
-echo " "
-echo "=========================================="
-echo "Setting default LuCI theme to argon..."
-echo "=========================================="
-COLLECTION_MAKEFILES=$(find ../feeds/luci/collections/ -type f -name "Makefile" 2>/dev/null)
-if [ -n "$COLLECTION_MAKEFILES" ]; then
-	sed -i "s/luci-theme-bootstrap/luci-theme-argon/g" $COLLECTION_MAKEFILES
-	echo "Done setting default LuCI theme to argon"
-else
-	echo "WARNING: No LuCI collection Makefile found, skip theme default patch"
-fi
-
 # PassWall (代理软件)
-UPDATE_PACKAGE "passwall" "Openwrt-Passwall/openwrt-passwall" "main" "pkg"
+UPDATE_PACKAGE "passwall" "Openwrt-Passwall/openwrt-passwall2" "main" "pkg"
 PATCH_PASSWALL_GLOBAL_LUA
 
 # OpenWrt 25.12 下 shadowsocksr-libev 的上游归档内容已变化，旧 MIRROR_HASH 失效。
 # 先禁用 SSR 组件，避免 passwall 选择该包导致下载阶段直接失败。
-PASSWALL_MAKEFILE="./luci-app-passwall/Makefile"
+PASSWALL_MAKEFILE="./luci-app-passwall2/Makefile"
 if [ -f "$PASSWALL_MAKEFILE" ]; then
 	echo "Patching PassWall defaults to disable broken ShadowsocksR components..."
 	sed -i '/config PACKAGE_$(PKG_NAME)_INCLUDE_ShadowsocksR_Libev_Client/,/default y/s/default y/default n/' "$PASSWALL_MAKEFILE"
