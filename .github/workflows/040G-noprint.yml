@@ -200,7 +200,7 @@ jobs:
         grep -q "CONFIG_PACKAGE_luci-app-quickfile=y" .config && desc+=" [Quickfile文件管理]" && short+="-quickfile"
         echo "CONFIG_DESC=$desc" >> $GITHUB_ENV
         echo "CONFIG_SHORT=$short" >> $GITHUB_ENV
-        echo "RELEASE_TAG=XG-040G-MD-ImmortalWrt-${BRANCH_SHORT}-${short}-$(date +"%Y%m%d")" >> $GITHUB_ENV
+        echo "RELEASE_TAG=XG-040G-MD-ImmortalWrt-${BRANCH_SHORT}-${short}-$(date +"%Y%m%d-%H%M%S")" >> $GITHUB_ENV
 
     - name: Rename Firmware Files
       if: steps.compile.outputs.status == 'success'
