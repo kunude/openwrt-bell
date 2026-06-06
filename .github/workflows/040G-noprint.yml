@@ -1,4 +1,4 @@
-name: 040G
+name: 040G-noprint
 
 on:
   workflow_dispatch:
