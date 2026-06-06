@@ -1,4 +1,4 @@
-name: Dual-Branch-Build-07
+name: 040G
 
 on:
   workflow_dispatch:
@@ -13,28 +13,8 @@ on:
         required: false
         type: boolean
         default: false
-      seed01:
-        description: 'seed-01.config'
-        required: false
-        type: boolean
-        default: false
-      seed02:
-        description: 'seed-02.config'
-        required: false
-        type: boolean
-        default: false
-      seed032:
+      seed03:
         description: 'seed-03.config'
-        required: false
-        type: boolean
-        default: false
-      seed04:
-        description: 'seed-04.config'
-        required: false
-        type: boolean
-        default: false
-      seed05:
-        description: 'seed-05.config'
         required: false
         type: boolean
         default: false
