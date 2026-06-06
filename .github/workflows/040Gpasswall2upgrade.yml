@@ -1,0 +1,283 @@
+name: 040Gpasswall2upgrade
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_master:
+        description: '编译 master-XG-040G-MD 分支'
+        required: false
+        type: boolean
+        default: true
+      branch_openwrt25:
+        description: '编译 openwrt-25.12-XG-040G-MD 分支'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REPO_URL: https://github.com/wina8201/immortalwrt
+  DEVICE_TARGET: airoha
+  DEVICE_SUBTARGET: an7581
+  CACHE_TOOLCHAIN: true
+  UPLOAD_BIN_DIR: false
+  FIRMWARE_RELEASE: true
+  TZ: Asia/Shanghai
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate build matrix
+        id: set-matrix
+        run: |
+          branches=()
+          if [[ "${{ github.event.inputs.branch_master }}" == "true" ]]; then
+            branches+=("master-XG-040G-MD")
+          fi
+          if [[ "${{ github.event.inputs.branch_openwrt25 }}" == "true" ]]; then
+            branches+=("openwrt-25.12-XG-040G-MD")
+          fi
+          if [ ${#branches[@]} -eq 0 ]; then
+            branches+=("master-XG-040G-MD")
+            echo "⚠️ 未选择任何分支，默认使用 master-XG-040G-MD"
+          fi
+
+          configs=("seed-03")
+
+          matrix_json='{"include":['
+          first=true
+          for branch in "${branches[@]}"; do
+            for config in "${configs[@]}"; do
+              if [ "$first" = true ]; then
+                first=false
+              else
+                matrix_json+=","
+              fi
+              matrix_json+="{\"branch\":\"$branch\",\"config\":\"$config\"}"
+            done
+          done
+          matrix_json+="]}"
+          echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
+
+  Build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
+    env:
+      REPO_BRANCH: ${{ matrix.branch }}
+      CONFIG_FILE: ${{ matrix.config }}.config
+
+    steps:
+    - name: Check Server Performance
+      run: |
+        echo "警告⚠ 分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
+        echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673 \n"
+        echo "CPU物理数量：$(cat /proc/cpuinfo | grep \"physical id\" | sort | uniq | wc -l)"
+        echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c) \n"
+        echo "已安装内存：$(sudo lshw -short -C memory | grep GiB)"
+        echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+
+    - name: Initialization Environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
+        sudo -E apt -yqq install dos2unix libfuse-dev
+        sudo -E apt -yqq autoremove --purge
+        sudo -E apt -yqq autoclean
+        sudo -E apt -yqq clean
+        sudo -E systemctl daemon-reload
+        sudo timedatectl set-timezone "$TZ"
+
+    - name: Combine Disks
+      uses: easimon/maximize-build-space@master
+      with:
+        swap-size-mb: 1024
+        temp-reserve-mb: 100
+        root-reserve-mb: 1024
+
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Clone Source Code
+      run: |
+        df -hT $GITHUB_WORKSPACE
+        AUTH_REPO_URL=$(echo "$REPO_URL" | sed "s|://|://x-access-token:${{ secrets.REPO_TOKEN }}@|")
+        git clone "$AUTH_REPO_URL" -b "$REPO_BRANCH" openwrt
+        cd openwrt
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+        echo "COMMIT_HASH=$(git rev-parse HEAD)" >> $GITHUB_ENV
+        echo "COMMIT_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+        echo "VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")" >> $GITHUB_ENV
+
+    - name: Add Missing platform.sh
+      run: |
+        mkdir -p $GITHUB_WORKSPACE/openwrt/target/linux/airoha/an7581/base-files/lib/upgrade
+        cat > $GITHUB_WORKSPACE/openwrt/target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh << 'EOF'
+        REQUIRE_IMAGE_METADATA=1
+        RAMFS_COPY_BIN='fitblk fit_check_sign'
+
+        platform_do_upgrade() {
+        	local board=$(board_name)
+
+        	case "$board" in
+        		gemtek,w1700k-ubi)
+        			fit_do_upgrade "$1"
+        			;;
+        		*)
+        			nand_do_upgrade "$1"
+        			;;
+        	esac
+        }
+
+        platform_check_image() {
+        	return 0
+        }
+        EOF
+        chmod +x $GITHUB_WORKSPACE/openwrt/target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh
+        echo "✅ platform.sh 已添加至 target/linux/airoha/an7581/base-files/lib/upgrade/platform.sh"
+
+    - name: Generate Variables
+      run: |
+        echo "SOURCE_REPO=$(echo $REPO_URL | awk -F '/' '{print $(NF)}')" >> $GITHUB_ENV
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+        case "$REPO_BRANCH" in
+          "master-XG-040G-MD") echo "BRANCH_SHORT=master" >> $GITHUB_ENV ;;
+          "openwrt-25.12-XG-040G-MD") echo "BRANCH_SHORT=25.12" >> $GITHUB_ENV ;;
+          *) echo "BRANCH_SHORT=$REPO_BRANCH" >> $GITHUB_ENV ;;
+        esac
+
+    - name: Cache Toolchain
+      if: env.CACHE_TOOLCHAIN == 'true'
+      uses: HiGarfield/cachewrtbuild@main
+      with:
+        ccache: false
+        mixkey: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+        prefix: ${{ env.OPENWRT_PATH }}
+
+    - name: Install Feeds
+      run: |
+        cd $OPENWRT_PATH
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Update third-party packages (homeproxy, passwall, etc.)
+      run: |
+        cd $OPENWRT_PATH
+        cp $GITHUB_WORKSPACE/scripts/update-packages.sh package/
+        cd package
+        chmod +x update-packages.sh
+        ./update-packages.sh
+
+    - name: Load Custom Configuration
+      run: |
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE $OPENWRT_PATH/.config
+        cd $OPENWRT_PATH
+        make defconfig
+
+    - name: Download DL Package
+      run: |
+        cd $OPENWRT_PATH
+        make download -j8
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile Firmware
+      id: compile
+      run: |
+        cd $OPENWRT_PATH
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+
+    - name: Check Space Usage
+      if: (!cancelled())
+      run: df -hT
+
+    - name: Organize Files
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        cd $OPENWRT_PATH/bin/targets/*/*
+        cat sha256sums
+        echo "VERSION_KERNEL=$(find -type f -name "*.manifest" -exec grep -oP '^kernel - \K.*?(?=~|-\d+-)' {} \;)" >> $GITHUB_ENV
+        cp $OPENWRT_PATH/.config build.config
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages
+        tar -zcf Packages.tar.gz packages
+        rm -rf packages feeds.buildinfo version.buildinfo
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+    - name: Generate Config Description & Short Name
+      if: steps.compile.outputs.status == 'success'
+      working-directory: ${{ env.OPENWRT_PATH }}
+      run: |
+        desc="基础功能"
+        short="base"
+        grep -q "CONFIG_PACKAGE_luci-app-openclash=y" .config && desc+=" [OpenClash]" && short+="-openclash"
+        grep -q "CONFIG_PACKAGE_luci-app-ksmbd=y" .config && desc+=" [KSMBD文件共享]" && short+="-ksmbd"
+        grep -q "CONFIG_PACKAGE_luci-app-quickfile=y" .config && desc+=" [Quickfile文件管理]" && short+="-quickfile"
+        echo "CONFIG_DESC=$desc" >> $GITHUB_ENV
+        echo "CONFIG_SHORT=$short" >> $GITHUB_ENV
+        echo "RELEASE_TAG=XG-040G-MD-ImmortalWrt-${BRANCH_SHORT}-${short}-$(date +"%Y%m%d-%H%M%S")" >> $GITHUB_ENV
+
+    - name: Rename Firmware Files
+      if: steps.compile.outputs.status == 'success'
+      working-directory: ${{ env.FIRMWARE_PATH }}
+      run: |
+        PREFIX="XG-040G-MD-ImmortalWrt-${BRANCH_SHORT}-${CONFIG_SHORT}"
+        [ -f *-squashfs-factory.bin ] && mv *-squashfs-factory.bin ${PREFIX}-squashfs-factory.bin
+        [ -f *-squashfs-sysupgrade.bin ] && mv *-squashfs-sysupgrade.bin ${PREFIX}-squashfs-sysupgrade.bin
+        rm -f sha256sums
+        sha256sum *.bin > sha256sums
+
+    - name: Upload Firmware To Release
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
+      uses: ncipollo/release-action@v1
+      with:
+        name: ${{ env.RELEASE_TAG }}
+        tag: ${{ env.RELEASE_TAG }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        artifacts: ${{ env.FIRMWARE_PATH }}/*
+        body: |
+          ### 📦 构建信息
+          | 项目 | 内容 |
+          |------|------|
+          | **设备型号** | Nokia Bell XG-040G-MD |
+          | **目标平台** | Airoha/an7581 |
+          | **源码分支** | ${{ env.REPO_BRANCH }} (`${{ env.COMMIT_SHORT }}`) |
+          | **提交哈希** | ${{ env.COMMIT_HASH }} |
+          | **配置类型** | ${{ env.CONFIG_DESC }} |
+          | **源码来源** | https://github.com/wina8201/immortalwrt (forked from fzs209/immortalwrt) |
+          | **编译时间** | ${{ env.DATE }} |
+          | **内核版本** | ${{ env.VERSION_KERNEL }} |
+
+          ### 🗂️ 文件说明
+          - `*-squashfs-sysupgrade.bin` → 在已有 OpenWrt/ImmortalWrt 中升级使用
+          - `*-squashfs-factory.bin` → 从uboot首次刷机使用
+          - `build.config` → 本次编译使用的完整配置文件
+
+          ### 🔐 默认信息
+          | 项目 | 默认值 |
+          |------|--------|
+          | **管理地址** | 192.168.1.1 |
+          | **用户名** | root |
+          | **密码** | *无（首次登录后请务必设置）* |
+
+          ### ⚠️ 注意事项
+          - 刷机前请务必核对设备型号，错误固件可能导致变砖。
+          - 建议在刷机前备份原厂固件和重要数据。
+          - 若固件内集成第三方插件，其安全性请自行评估。
+          - 本固件为自动编译生成，请仔细核对文件完整性后再刷写。
+
+          ---
+          *由 GitHub Actions 自动构建 | Release ${{ env.RELEASE_TAG }}*
+
+          <details>
+          <summary>📜 源码最后提交</summary>
+          ${{ env.VERSION_INFO }}
+          </details>
