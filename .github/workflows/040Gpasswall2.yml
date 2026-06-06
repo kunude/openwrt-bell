@@ -139,18 +139,6 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Add Quickfile Package
-      run: |
-        cd $OPENWRT_PATH
-        git clone https://github.com/sbwml/luci-app-quickfile package/quickfile
-
-    - name: Update Feeds for Quickfile
-      run: |
-        cd $OPENWRT_PATH
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        ./scripts/feeds install luci-app-quickfile quickfile
-
     - name: Update third-party packages (homeproxy, passwall, etc.)
       run: |
         cd $OPENWRT_PATH
